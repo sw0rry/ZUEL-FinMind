@@ -26,6 +26,7 @@
         /* 加载动画 */
         .typing { font-style: italic; color: #888; font-size: 0.8em; margin-left: 10px; display: none; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 
@@ -81,9 +82,17 @@
         const chatBox = document.getElementById('chatBox');
         const div = document.createElement('div');
         div.className = `message ${type}`;
-        div.textContent = text; // 防止 HTML 注入
+
+        if (type === 'ai') {
+            // 如果是 AI，用 marked 解析 Markdown 为 HTML
+            div.innerHTML = marked.parse(text);
+        } else {
+            // 如果是用户，还是用纯文本（防止用户输入恶意代码攻击）
+            div.textContent = text;
+        }
+
         chatBox.appendChild(div);
-        chatBox.scrollTop = chatBox.scrollHeight; // 自动滚动到底部
+        chatBox.scrollTop = chatBox.scrollHeight;
     }
 
     function handleEnter(e) {
