@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>ZUEL FinMind - 智能金融终端</title>
+    <style>
+        /* --- 简单的 CSS 样式 (暗黑金融风) --- */
+        body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; justify-content: center; height: 100vh; }
+        .chat-container { width: 800px; background-color: #2d2d2d; display: flex; flex-direction: column; border-left: 1px solid #444; border-right: 1px solid #444; }
+        .header { padding: 20px; background-color: #0056b3; text-align: center; font-weight: bold; font-size: 1.2em; border-bottom: 2px solid #004494; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { padding: 10px 15px; border-radius: 8px; max-width: 70%; line-height: 1.5; font-size: 0.95em; position: relative; }
+
+        /* 用户消息 (右边，绿色) */
+        .message.user { align-self: flex-end; background-color: #2b5c35; border-bottom-right-radius: 2px; }
+        /* AI消息 (左边，深灰) */
+        .message.ai { align-self: flex-start; background-color: #3d3d3d; border-bottom-left-radius: 2px; border: 1px solid #555; }
+
+        .input-area { padding: 20px; background-color: #252525; border-top: 1px solid #444; display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px; border-radius: 4px; border: 1px solid #555; background-color: #333; color: white; outline: none; }
+        input:focus { border-color: #0056b3; }
+        button { padding: 10px 25px; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background-color: #004494; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        /* 加载动画 */
+        .typing { font-style: italic; color: #888; font-size: 0.8em; margin-left: 10px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="header">ZUEL FinMind 智能投研助手</div>
+    <div class="chat-box" id="chatBox">
+        <div class="message ai">你好，我是你的专属金融分析师。请问有什么可以帮你？<br><span style="font-size:0.8em;color:#888">（基于 DeepSeek V3 模型）</span></div>
+    </div>
+    <div class="typing" id="typingIndicator">分析师正在思考...</div>
+    <div class="input-area">
+        <input type="text" id="userInput" placeholder="输入金融问题，例如：如何分析一家公司的财报？" onkeypress="handleEnter(event)">
+        <button onclick="sendMessage()" id="sendBtn">发送</button>
+    </div>
+</div>
+
+<script>
+    /* --- 简单的 JS 逻辑 --- */
+    async function sendMessage() {
+        const input = document.getElementById('userInput');
+        const chatBox = document.getElementById('chatBox');
+        const sendBtn = document.getElementById('sendBtn');
+        const typing = document.getElementById('typingIndicator');
+
+        const text = input.value.trim();
+        if (!text) return;
+
+        // 1. 显示用户消息
+        addMessage(text, 'user');
+        input.value = '';
+        input.disabled = true;
+        sendBtn.disabled = true;
+        typing.style.display = 'block'; // 显示"思考中"
+
+        try {
+            // 2. 调用后端接口 (你写的 Java 接口)
+            const response = await fetch(`/ai/chat?msg=${encodeURIComponent(text)}`);
+            const data = await response.text();
+
+            // 3. 显示 AI 回复
+            addMessage(data, 'ai');
+        } catch (error) {
+            addMessage("系统繁忙，请稍后再试。", 'ai');
+        } finally {
+            // 4. 恢复状态
+            input.disabled = false;
+            sendBtn.disabled = false;
+            typing.style.display = 'none';
+            input.focus();
+        }
+    }
+
+    function addMessage(text, type) {
+        const chatBox = document.getElementById('chatBox');
+        const div = document.createElement('div');
+        div.className = `message ${type}`;
+        div.textContent = text; // 防止 HTML 注入
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight; // 自动滚动到底部
+    }
+
+    function handleEnter(e) {
+        if (e.key === 'Enter') sendMessage();
+    }
+</script>
+
+</body>
+</html>
