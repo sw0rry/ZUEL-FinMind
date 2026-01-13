@@ -15,7 +15,7 @@
 * **核心框架**: Spring Boot 3.2.2
 * **AI 接入**: Spring AI 0.8.1 (OpenAI Protocol)
 * **大模型**: DeepSeek-V3 (Temperature=0.1 严谨模式)
-* **数据持久化**: MySQL + MyBatis-Plus (预留)
+* **数据审计**: MySQL + MyBatis-Plus (已实现全量对话日志自动存储)
 * **前端**: HTML5 + CSS3 (Dark Mode 金融终端风格)
 
 ## 📸 效果演示 (Demo)
