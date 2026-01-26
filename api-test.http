@@ -1,0 +1,53 @@
+##### 测试1：发送一个金融问题
+##POST http://localhost:8080/chat/ask
+##Content-Type: application/json
+##
+##{
+##  "userId": "user_001",
+##  "message": "Java里的List是什么？"
+##}
+#
+#### 测试1：测试拒绝能力
+#POST http://localhost:8080/chat/ask
+#Content-Type: application/json
+#
+#{
+#  "userId": "1001",
+#  "message": "叫我做红烧肉"
+#}
+#
+#### 测试2：测试专业能力
+#POST http://localhost:8080/chat/ask
+#Content-Type: application/json
+#
+#{
+#  "userId": "1001",
+#  "message": "解释一下什么是量化交易？"
+#}
+#
+#### 测试3：测试专业能力
+#POST http://localhost:8080/chat/ask
+#Content-Type: application/json
+#
+#{
+#  "userId": "1001",
+#  "message": "它有那些风险？"
+#}
+
+### 第一轮对话
+POST http://localhost:8080/chat/ask
+Content-Type: application/json
+
+{
+  "userId": "BOSS_001",
+  "message": "我想了解一下比亚迪这家公司。"
+}
+
+### 第二轮对话
+POST http://localhost:8080/chat/ask
+Content-Type: application/json
+
+{
+  "userId": "BOSS_001",
+  "message": "它的市盈率大概是多少？"
+}
