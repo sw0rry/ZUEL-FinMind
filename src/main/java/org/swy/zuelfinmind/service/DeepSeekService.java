@@ -1,6 +1,11 @@
 package org.swy.zuelfinmind.service;
 
+import ai.z.openapi.ZhipuAiClient;
+import ai.z.openapi.service.embedding.EmbeddingCreateParams;
+import ai.z.openapi.service.embedding.EmbeddingResponse;
+import ai.z.openapi.service.embedding.EmbeddingResult;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -9,6 +14,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
+import org.swy.zuelfinmind.SimpleEmbeddingClient;
 import org.swy.zuelfinmind.entity.ChatRecord;
 import org.swy.zuelfinmind.mapper.ChatRecordMapper;
 
@@ -26,10 +32,17 @@ public class DeepSeekService {
     // 引入档案管理员（Mapper）
     private final ChatRecordMapper chatRecordMapper;
 
+    // 新增：注入Embedding工具
+    private final SimpleEmbeddingClient embeddingClient;
+
+//    // 注入官方客户端
+//    private final ZhipuAiClient zhipuAiClient;
+
     // 构造函数注入：Spring会自动把ChatModel递给你
-    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper) {
+    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, SimpleEmbeddingClient embeddingClient) {
         this.chatModel = chatModel;
         this.chatRecordMapper = chatRecordMapper;
+        this.embeddingClient = embeddingClient;
     }
 
 //////    // 业务方法：真正打电话给DeepSeek
@@ -157,5 +170,57 @@ public class DeepSeekService {
             messages.add(new AssistantMessage(record.getAnswer()));
         }
         return messages;
+    }
+
+    // 新增一个启动自测方法
+    // @PostConstruct表示：当这个类创建好之后，自动运行这个方法
+    @PostConstruct
+    public void testEmbedding() {
+        System.out.println(">>> 正在测试 Embedding(Plan C: 手写 HTTP 版)...");
+        try {
+            // 尝试把“ZUEL”变成向量
+            float[] vector = embeddingClient.embed("ZUEL");
+
+            System.out.println(">>> 成功！向量长度: " + vector.length); // 数组用 .length
+            // 只打印前 5 个数字看看
+            System.out.print(">>> 前5位数据: [");
+            for (int i = 0; i < 5 && i < vector.length; i++) {
+                System.out.print(vector[i] + ", ");
+            }
+            System.out.println("...]");
+
+//            // 组装官方请求对象
+//            EmbeddingCreateParams request = new EmbeddingCreateParams();
+//            request.setModel("embedding-3");
+//            request.setDimensions(1024);
+//            request.setInput("ZUEL");
+//
+//            // 发送请求
+//            EmbeddingResponse response = zhipuAiClient.embeddings().createEmbeddings(request);
+//
+//            if (response.isSuccess()) {
+//                // 1. 第一层 getData(): 拿到数据包装类
+//                // 2. 第二层 getData(): 拿到 List<Embedding> (这就是你问的那个 List)
+//                // 3. get(0): 因为我们只发了一句话，所以取第一个
+//                // 4. getEmbedding(): 这才是真正的向量 List<Double>
+//                List<Double> vectorList = response.getData().getData().get(0).getEmbedding();
+//
+//                System.out.println(">>> 成功！向量长度: " + vectorList.size());
+//
+//                // 打印前5位看看
+//                System.out.print(">>> 前5位: [");
+//                for (int i = 0; i < 5 && i < vectorList.size(); i++) {
+//                    System.out.print(vectorList.get(i) + ", ");
+//                }
+//                System.out.println("...]");
+//
+//            } else {
+//                System.err.println(">>> 调用失败: " + response.getMsg());
+//            }
+
+        } catch (Exception e) {
+            System.err.println(">>> Embedding 测试失败: " + e.getMessage());
+            System.err.println(">>> 提示：可能是 DeepSeek 不支持 embedding 接口，我们需要换一家供应商。");
+        }
     }
 }
