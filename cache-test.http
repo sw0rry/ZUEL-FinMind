@@ -1,8 +1,26 @@
-### 暂时测试
+### 暂时测试1
 POST http://localhost:8080/chat/ask
 Content-Type: application/json
 
 {
   "userId": "1",
   "message": "请分析一下 ZUEL-FinMind 项目目前的开发进度。"
+}
+
+### 暂时测试2
+POST http://localhost:8080/chat/ask
+Content-Type: application/json
+
+{
+  "userId": "1",
+  "message": "ZUEL在哪里?"
+}
+
+### 暂时测试3
+POST http://localhost:8080/chat/ask
+Content-Type: application/json
+
+{
+  "userId": "1",
+  "message": "Java能干什么？"
 }
