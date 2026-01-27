@@ -23,21 +23,6 @@ public class ChatController {
     // 网址：POST http://localhost:8080/chat/ask
     @PostMapping("/ask")
     public String talk(@RequestBody ChatRequest request) {
-////        // 1.先检查能不能收到
-////        System.out.println("收到用户：" + request.getUserId());
-////        System.out.println("收到问题：" + request.getMessage());
-////
-////        // 2.暂时给出假回复
-////        return "后端已收到你的问题：" + request.getMessage();
-//
-//        // 1.接待员拿到用户问题
-//        String userQuestion = request.getMessage();
-//
-//        // 2.转交专家处理（调用Service）
-//        String aiAnswer = deepSeekService.chat(userQuestion);
-//
-//        // 3.把专家回复传回给用户
-//        return aiAnswer;
 
         // 1.接待员拿到用户问题和ID
         String userQuestion = request.getMessage();
