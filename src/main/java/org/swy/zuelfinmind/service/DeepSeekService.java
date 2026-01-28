@@ -4,8 +4,20 @@ import ai.z.openapi.ZhipuAiClient;
 import ai.z.openapi.service.embedding.EmbeddingCreateParams;
 import ai.z.openapi.service.embedding.EmbeddingResponse;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.google.protobuf.Struct;
+import com.google.protobuf.Value;
 import io.pinecone.clients.Index;
+import io.pinecone.clients.Pinecone;
+import io.pinecone.configs.PineconeConfig;
+import io.pinecone.configs.PineconeConnection;
+import io.pinecone.unsigned_indices_model.QueryResponseWithUnsignedIndices;
+import io.pinecone.unsigned_indices_model.VectorWithUnsignedIndices;
 import jakarta.annotation.PostConstruct;
+import org.apache.ibatis.mapping.Environment;
+import org.openapitools.db_control.client.model.CreateIndexForModelRequest;
+import org.openapitools.db_control.client.model.CreateIndexForModelRequestEmbed;
+import org.openapitools.db_control.client.model.DeletionProtection;
+import org.openapitools.db_control.client.model.IndexModel;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -14,13 +26,13 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
+//import org.swy.zuelfinmind.config.PcConfig;
 import org.swy.zuelfinmind.entity.ChatRecord;
 import org.swy.zuelfinmind.mapper.ChatRecordMapper;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service // 1.告诉Spring：这是“专家”，请开机时把它实例化放到容器里
 public class DeepSeekService {
@@ -35,18 +47,20 @@ public class DeepSeekService {
     private final ZhipuAiClient zhipuAiClient;
 
     // 注入新服务
-    private final KnowledgeBaseService kbService;
+//    private final KnowledgeBaseService kbService;
 
-//    // 注入向量数据库
-//    private final Index pineconeIndex;
+    // 注入向量数据库
+    private final Index pineconeIndex;
+//    private final Pinecone pineconeClient;
 
     // 构造函数注入：Spring会自动把ChatModel递给你
-    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient, KnowledgeBaseService kbService/*, Index pineconeIndex*/) {
+    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient/*, KnowledgeBaseService kbService*/, Index pineconeIndex/*, Pinecone pineconeClient*/) {
         this.chatModel = chatModel;
         this.chatRecordMapper = chatRecordMapper;
         this.zhipuAiClient = zhipuAiClient;
-        this.kbService = kbService;
-//        this.pineconeIndex = pineconeIndex;
+//        this.kbService = kbService;
+        this.pineconeIndex = pineconeIndex;
+//        this.pineconeClient = pineconeClient;
     }
 
     public String chat(String userId, String userMessage) {
@@ -64,21 +78,53 @@ public class DeepSeekService {
         // 逻辑：查出最近的10条，按时间倒序查（最新的在上面），然后反转回来（按时间正序）
         List<Message> historyMessages = getHistoryMessages(userId);
 
-        // 3.准备”面包底层“：知识库 + 当前提问
+//        // 3.准备”面包底层“：知识库 + 当前提问
+//        String finalUserMsg = userMessage;
+//        // 新增知识库
+//        //  1.先去“书架”里找找有没有相关“小抄”
+//        String context = kbService.search(userMessage);
+//        //  2.如果找到“小抄”就把它“夹带”在问题里
+//        if (!"未找到相关知识".equals(context)) {
+//            System.out.println("🤖 RAG 触发！已注入背景知识: " + context);
+//            // 【关键咒语】告诉 AI：这是背景资料，请根据这个回答，不要瞎编。
+//            finalUserMsg  = String.format(
+//                    "【背景资料】：%s\n\n【用户问题】：%s\n\n请根据背景资料回答问题。如果资料里没有答案，就说不知道。",
+//                    context,
+//                    userMessage
+//            );
+//        }
+
+        // 算向量
+        List<Float> queryVector = getVector(userMessage);
+
         String finalUserMsg = userMessage;
-        // 新增知识库
-        //  1.先去“书架”里找找有没有相关“小抄”
-        String context = kbService.search(userMessage);
-        //  2.如果找到“小抄”就把它“夹带”在问题里
-        if (!"未找到相关知识".equals(context)) {
-            System.out.println("🤖 RAG 触发！已注入背景知识: " + context);
-            // 【关键咒语】告诉 AI：这是背景资料，请根据这个回答，不要瞎编。
-            finalUserMsg  = String.format(
-                    "【背景资料】：%s\n\n【用户问题】：%s\n\n请根据背景资料回答问题。如果资料里没有答案，就说不知道。",
-                    context,
-                    userMessage
-            );
-        }
+
+        // 查Pinecone（HTTP）
+        QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(1, queryVector, null, null, null, "zuel-namespace", null, false, true);
+
+        // 开始解析
+        String context = queryResponse.getMatchesList().stream()
+                // 过滤：只保留分数高（相似度高）的结果，比如大于0.75
+                .filter(match -> match.getScore() > 0.5)
+
+                // 提取：从Protobuf结构里把文字挖出来
+                .map(match -> {
+                    // 拿到metadata里的所有字段map
+                    Map<String, Value> fieldsMap = match.getMetadata().getFieldsMap();
+
+                    // 【关键点】key是”text“
+                    if (fieldsMap.containsKey("text")) {
+                        return fieldsMap.get("text").getStringValue();
+                    } else {
+                        return ""; // 没找到返回空
+                    }
+                })
+                // 拼接：把多条结果拼成一段话，用换行符隔开
+                .collect(Collectors.joining("\n\n"));
+
+        // 3. 打印出来看看 (这就是我们要喂给 AI 的背景资料)
+        System.out.println("🤖 RAG 检索到的干货:\n" + context);
+
         UserMessage currentUserMsg = new UserMessage(finalUserMsg);
 
         // 4.拼接三明治（List顺序：System -> History -> Current）
@@ -101,6 +147,62 @@ public class DeepSeekService {
         chatRecordMapper.insert(record);
 
         return aiAnswer;
+    }
+
+    @PostConstruct
+    public void initData() {
+        System.out.println(">>> 正在通过官方 SDK 初始化数据...");
+//        Pinecone pc = new Pinecone.Builder(apiKey).build();
+//        String indexName = "zuel-finmind";
+//        String cloud = "aws";
+//        String region = "us-east-1";
+//        String vectorType = "dense";
+//        Map<String, String> tags = new HashMap<>();
+//        tags.put("项目", "zuel");
+//        tags.put("制作", "sworry");
+//        pc.createServerlessIndex(
+//                indexName,
+//                "cosine",
+//                1024,
+//                cloud,
+//                region,
+//                DeletionProtection.DISABLED,
+//                tags
+//        );
+//
+//        PineconeConfig config = new PineconeConfig(apiKey);
+//        config.setHost("INDEX_HOST");
+//        PineconeConnection connection = new PineconeConnection(config);
+//        Index index = new Index(config, connection, "INDEX_NAME");
+
+        List<String> texts = List.of(
+                "ZUEL (中南财经政法大学) 的王牌专业是会计学、金融学和法学。",
+                "DeepSeek 是一家专注通用的 AI 公司，提供强大的推理模型。",
+                "Pinecone 是一个云端向量数据库，官方 SDK 比 Spring 封装更灵活。"
+        );
+
+        for (int i = 0; i < texts.size(); i++) {
+            String text = texts.get(i);
+
+            List<Float> vector = getVector(text); // 智谱算向量
+
+            if (vector != null) {
+                // 构造 Metadata (把文本存进去)
+                Struct metadata = Struct.newBuilder()
+                                .putFields("text", Value.newBuilder().setStringValue(text).build())
+                                .putFields("source", Value.newBuilder().setStringValue("init-job").build())
+                                .build();
+
+                try {
+                    pineconeIndex.upsert("" + i, vector, null, null, metadata, "zuel-namespace");
+                    System.out.println("✅ 成功！已上传 " + (i + 1) + " 条数据到 Pinecone。");
+                } catch (Exception e) {
+                    System.err.println("❌ 上传失败: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+        }
+
     }
 
     // === 【新增方法】 去档案室查历史记录 ===
@@ -128,62 +230,24 @@ public class DeepSeekService {
         return messages;
     }
 
-    // 新增一个启动自测方法
-    // @PostConstruct表示：当这个类创建好之后，自动运行这个方法
-//    @PostConstruct
-//    public void testEmbedding() {
-//        System.out.println(">>> 正在测试 Embedding（Master稳定版）...");
-//        try {
-//
-//            // 组装官方请求对象
-//            EmbeddingCreateParams request = new EmbeddingCreateParams();
-//            request.setModel("embedding-3");
-//            request.setDimensions(1024);
-//            request.setInput("ZUEL");
-//
-//            // 发送请求
-//            EmbeddingResponse response = zhipuAiClient.embeddings().createEmbeddings(request);
-//
-//            if (response.isSuccess()) {
-//                // 1. 第一层 getData(): 拿到数据包装类
-//                // 2. 第二层 getData(): 拿到 List<Embedding> (这就是你问的那个 List)
-//                // 3. get(0): 因为我们只发了一句话，所以取第一个
-//                // 4. getEmbedding(): 这才是真正的向量 List<Double>
-//                List<Double> vectorList = response.getData().getData().get(0).getEmbedding();
-//
-//                System.out.println(">>> 成功！向量长度: " + vectorList.size());
-//
-//                // 打印前5位看看
-//                System.out.print(">>> 前5位: [");
-//                for (int i = 0; i < 5 && i < vectorList.size(); i++) {
-//                    System.out.print(vectorList.get(i) + ", ");
-//                }
-//                System.out.println("...]");
-//
-//            } else {
-//                System.err.println(">>> 调用失败: " + response.getMsg());
-//            }
-//
-//        } catch (Exception e) {
-//            System.err.println(">>> Embedding 测试失败: " + e.getMessage());
-//        }
-//    }
+    // --- 工具方法：调用智谱获取向量（Double转Float）
+    private List<Float> getVector(String text) {
+        try {
+            EmbeddingCreateParams request = new EmbeddingCreateParams();
+            request.setModel("embedding-3");
+            request.setDimensions(1024);
+            request.setInput(text);
 
-    @PostConstruct
-    public void testRAG() {
-        System.out.println(">>> 正在初始化知识库...");
+            EmbeddingResponse response = zhipuAiClient.embeddings().createEmbeddings(request);
 
-        // 1. 模拟存入一些只有你知道的“私有知识”
-//        kbService.addDocument("ZUEL是中南财经政法大学的简称，位于武汉。");
-//        kbService.addDocument("Java不仅能写后端，还能通过Spring AI开发大模型应用。");
-//        kbService.addDocument("小明的身高是180cm，喜欢唱跳rap。"); // 干扰项
-
-        System.out.println(">>> --------------------------------");
-
-        // 2.模拟提问
-        String query = "ZUEL在哪里？";
-        System.out.println(">>> 提问: " + query);
-        String result = kbService.search(query);
-        System.out.println(">>> 最终答案: " + result);
+            if (response.isSuccess()) {
+                // 智谱返回List<Double>,Pinecone需要List<Float>
+                List<Double> doubleList = response.getData().getData().get(0).getEmbedding();
+                return doubleList.stream().map(Double::floatValue).collect(Collectors.toList());
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 }
