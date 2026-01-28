@@ -4,6 +4,7 @@ import ai.z.openapi.ZhipuAiClient;
 import ai.z.openapi.service.embedding.EmbeddingCreateParams;
 import ai.z.openapi.service.embedding.EmbeddingResponse;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import io.pinecone.clients.Index;
 import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -33,15 +34,19 @@ public class DeepSeekService {
     // 注入官方客户端
     private final ZhipuAiClient zhipuAiClient;
 
-    //注入新服务
+    // 注入新服务
     private final KnowledgeBaseService kbService;
 
+//    // 注入向量数据库
+//    private final Index pineconeIndex;
+
     // 构造函数注入：Spring会自动把ChatModel递给你
-    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient, KnowledgeBaseService kbService) {
+    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient, KnowledgeBaseService kbService/*, Index pineconeIndex*/) {
         this.chatModel = chatModel;
         this.chatRecordMapper = chatRecordMapper;
         this.zhipuAiClient = zhipuAiClient;
         this.kbService = kbService;
+//        this.pineconeIndex = pineconeIndex;
     }
 
     public String chat(String userId, String userMessage) {
@@ -169,9 +174,9 @@ public class DeepSeekService {
         System.out.println(">>> 正在初始化知识库...");
 
         // 1. 模拟存入一些只有你知道的“私有知识”
-        kbService.addDocument("ZUEL是中南财经政法大学的简称，位于武汉。");
-        kbService.addDocument("Java不仅能写后端，还能通过Spring AI开发大模型应用。");
-        kbService.addDocument("小明的身高是180cm，喜欢唱跳rap。"); // 干扰项
+//        kbService.addDocument("ZUEL是中南财经政法大学的简称，位于武汉。");
+//        kbService.addDocument("Java不仅能写后端，还能通过Spring AI开发大模型应用。");
+//        kbService.addDocument("小明的身高是180cm，喜欢唱跳rap。"); // 干扰项
 
         System.out.println(">>> --------------------------------");
 

@@ -71,6 +71,12 @@
             <version>0.3.0</version>
         </dependency>
 
+        <dependency>
+            <groupId>io.pinecone</groupId>
+            <artifactId>pinecone-client</artifactId>
+            <version>5.0.0</version>
+        </dependency>
+
     </dependencies>
     <dependencyManagement>
         <dependencies>
