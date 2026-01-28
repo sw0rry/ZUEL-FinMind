@@ -1,26 +1,17 @@
 package org.swy.zuelfinmind.config;
 
 import io.pinecone.clients.Index;
-import io.pinecone.clients.Pinecone;
 import io.pinecone.configs.PineconeConfig;
 import io.pinecone.configs.PineconeConnection;
-import lombok.Data;
-import org.openapitools.db_control.client.model.DeletionProtection;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.util.HashMap;
-import java.util.Map;
 
 @Configuration
 public class PcConfig {
 
     @Value("${YOUR_EDB_KEY}")
     private String apiKey;
-
-    @Value("${YOUR_EDB_NAME}")
-    private String indexName;
 
 //    @Bean
 //    public Pinecone pineconeClient() {

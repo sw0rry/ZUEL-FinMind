@@ -8,7 +8,7 @@ import org.swy.zuelfinmind.dto.ChatRequest;
 import org.swy.zuelfinmind.service.DeepSeekService;
 
 @RestController
-@RequestMapping("/chat")
+@RequestMapping("/ai")
 public class ChatController {
 
     // 注入专家
@@ -21,7 +21,7 @@ public class ChatController {
 
     // 动作：接受对话请求
     // 网址：POST http://localhost:8080/chat/ask
-    @PostMapping("/ask")
+    @PostMapping("/chat")
     public String talk(@RequestBody ChatRequest request) {
 
         // 1.接待员拿到用户问题和ID

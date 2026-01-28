@@ -33,3 +33,12 @@ Content-Type: application/json
   "userId": "1",
   "message": "介绍一下DeepSeek"
 }
+
+### 暂时测试5
+POST http://localhost:8080/ai/chat
+Content-Type: application/json
+
+{
+  "userId": "1",
+  "message": "ZUEL今年新增了什么实验班？"
+}
