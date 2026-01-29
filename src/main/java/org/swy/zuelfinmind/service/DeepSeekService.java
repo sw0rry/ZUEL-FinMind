@@ -55,12 +55,14 @@ public class DeepSeekService {
     public String chat(String userId, String userMessage) {
         // 1.准备“面包顶层”：系统人设
         String systemText = """
-                你是一个名为 'ZUEL-FinMind' 的专业金融AI助手，由中南财经政法大学(ZUEL)的学生开发。
-                            你的核心原则：
-                            1. 只回答有关中南财经政法大学、金融、经济、编程或数据分析相关的问题。
-                            2. 如果用户问生活类问题（如做菜、娱乐），请礼貌但坚决地拒绝，并引导他们回到金融话题。
-                            3. 回答要简短精炼，多用数据说话，避免长篇大论。
-                """;
+        你是一个名为 'ZUEL-FinMind' 的专业金融AI助手，由中南财经政法大学(ZUEL)的学生开发。
+        
+        你的核心原则：
+        1. 优先回答有关中南财经政法大学、金融、经济、编程相关的问题。
+        2. 如果用户进行自我介绍或日常问候，请热情回应并记住他们的信息。
+        3. 回答要简短精炼，多用数据说话。
+        """;
+
         SystemMessage systemMsg = new SystemMessage(systemText);
 
         // 2.准备”中间夹心“：从数据库捞取历史记忆
@@ -72,12 +74,19 @@ public class DeepSeekService {
         List<Float> queryVector = getVector(userMessage);
 
         // 查Pinecone（HTTP）
-        QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(3, queryVector, null, null, null, "zuel-namespace", null, false, true);
+        // -----------------------------------------------------------------
+        // 修改点 2：检索部分 (Chat) - 扩大搜索范围，降低准入门槛
+        // -----------------------------------------------------------------
+        // 【核心调优 B】：Top-K 从 3 -> 6
+        // 原理：宁可多捞几个无关的，也不能漏掉一个正确的
+        QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(6, queryVector, null, null, null, "zuel-namespace-v2", null, false, true);
 
         // 开始解析
         String context = queryResponse.getMatchesList().stream()
                 // 过滤：只保留分数高（相似度高）的结果，比如大于0.75
-                .filter(match -> match.getScore() > 0.6)
+                // 【核心调优 C】：阈值从 0.45 -> 0.40 (甚至 0.38)
+                // 原理：DeepSeek 很聪明，稍微不相关一点的资料它能自己剔除，不要在这一步卡太死
+                .filter(match -> match.getScore() > 0.4)
 
                 // 提取：从Protobuf结构里把文字挖出来
                 .map(match -> {
@@ -97,11 +106,25 @@ public class DeepSeekService {
         // 3. 打印出来看看 (这就是我们要喂给 AI 的背景资料)
         System.out.println("🤖 RAG 检索到的干货:\n" + context);
 
-        String finalUserMsg  = String.format(
-                "【背景资料】：%s\n\n【用户问题】：%s\n\n请严格按照背景资料回答问题，不要添加。如果资料里没有答案，就说不知道。",
-                context,
-                userMessage
-        );
+        // -----------------------------------------------------------
+        // 🔧 【修复点】：根据是否查到资料，动态调整指令
+        // -----------------------------------------------------------
+        String finalUserMsg;
+        if (context == null || context.trim().isEmpty()) {
+            // 场景 A：没查到资料 (比如闲聊、打招呼、自我介绍)
+            // 策略：不要强迫它“不知道”，而是让它自由发挥，利用历史记录聊天
+            System.out.println("🤖 未检索到RAG资料，切换为[自由对话模式]");
+            finalUserMsg = userMessage;
+        } else {
+            // 场景 B：查到了资料 (比如问ZUEL专业)
+            // 策略：严格限制范围，防止幻觉
+            System.out.println("🤖 检索到RAG资料，切换为[严格知识库模式]");
+            finalUserMsg = String.format(
+                    "【背景资料】：%s\n\n【用户问题】：%s\n\n请结合背景资料和上下文回答。如果资料中包含答案，请依据资料；如果是闲聊或资料不相关，请利用你的通用知识回答。",
+                    context,
+                    userMessage
+            );
+        }
 
         UserMessage currentUserMsg = new UserMessage(finalUserMsg);
 
@@ -127,52 +150,52 @@ public class DeepSeekService {
         return aiAnswer;
     }
 
-    @PostConstruct
-    public void initData() {
-        System.out.println(">>> 正在通过官方 SDK 初始化数据...");
-
-        List<String> texts = List.of(
-                "ZUEL (中南财经政法大学) 的王牌专业是会计学、金融学和法学。",
-                "DeepSeek 是一家专注通用的 AI 公司，提供强大的推理模型。",
-                "Pinecone 是一个云端向量数据库，官方 SDK 比 Spring 封装更灵活。",
-                "Java 能写代码，也能开发 Spring 环境。"
-        );
-
-        ArrayList<VectorWithUnsignedIndices> vectorList = new ArrayList<>();
-
-        for (int i = 0; i < texts.size(); i++) {
-            String text = texts.get(i);
-
-            List<Float> vector = getVector(text); // 智谱算向量
-
-            if (vector != null) {
-                // 构造 Metadata (把文本存进去)
-                Struct metadata = Struct.newBuilder()
-                                .putFields("text", Value.newBuilder().setStringValue(text).build())
-                                .putFields("source", Value.newBuilder().setStringValue("init-job").build())
-                                .build();
-
-                VectorWithUnsignedIndices vectorWithUnsignedIndices = new VectorWithUnsignedIndices(
-                        "doc-" + i,
-                        vector,
-                        metadata,
-                        null
-                );
-
-                vectorList.add(vectorWithUnsignedIndices);
-
-//                try {
-//                    pineconeIndex.upsert("" + i, vector, null, null, metadata, "zuel-namespace");
-//                    System.out.println("✅ 成功！已上传 " + (i + 1) + " 条数据到 Pinecone。");
-//                } catch (Exception e) {
-//                    System.err.println("❌ 上传失败: " + e.getMessage());
-//                    e.printStackTrace();
-//                }
-            }
-        }
-
-        UpsertBatch(vectorList);
-    }
+//    @PostConstruct
+//    public void initData() {
+//        System.out.println(">>> 正在通过官方 SDK 初始化数据...");
+//
+//        List<String> texts = List.of(
+//                "ZUEL (中南财经政法大学) 的王牌专业是会计学、金融学和法学。",
+//                "DeepSeek 是一家专注通用的 AI 公司，提供强大的推理模型。",
+//                "Pinecone 是一个云端向量数据库，官方 SDK 比 Spring 封装更灵活。",
+//                "Java 能写代码，也能开发 Spring 环境。"
+//        );
+//
+//        ArrayList<VectorWithUnsignedIndices> vectorList = new ArrayList<>();
+//
+//        for (int i = 0; i < texts.size(); i++) {
+//            String text = texts.get(i);
+//
+//            List<Float> vector = getVector(text); // 智谱算向量
+//
+//            if (vector != null) {
+//                // 构造 Metadata (把文本存进去)
+//                Struct metadata = Struct.newBuilder()
+//                                .putFields("text", Value.newBuilder().setStringValue(text).build())
+//                                .putFields("source", Value.newBuilder().setStringValue("init-job").build())
+//                                .build();
+//
+//                VectorWithUnsignedIndices vectorWithUnsignedIndices = new VectorWithUnsignedIndices(
+//                        "doc-" + i,
+//                        vector,
+//                        metadata,
+//                        null
+//                );
+//
+//                vectorList.add(vectorWithUnsignedIndices);
+//
+////                try {
+////                    pineconeIndex.upsert("" + i, vector, null, null, metadata, "zuel-namespace");
+////                    System.out.println("✅ 成功！已上传 " + (i + 1) + " 条数据到 Pinecone。");
+////                } catch (Exception e) {
+////                    System.err.println("❌ 上传失败: " + e.getMessage());
+////                    e.printStackTrace();
+////                }
+//            }
+//        }
+//
+//        UpsertBatch(vectorList);
+//    }
 
     // A helper function that breaks an ArrayList into chunks of batchSize
     private static ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks(ArrayList<VectorWithUnsignedIndices> vectors) {
@@ -203,7 +226,7 @@ public class DeepSeekService {
         QueryWrapper<ChatRecord> query = new QueryWrapper<>();
         query.eq("user_id", userId) // 查当前客户
                 .orderByDesc("create_time") // 按时间倒序（为了取最新的）
-                .last("limit 10"); // 只取最近10条，防止上下文爆炸
+                .last("limit 3"); // 只取最近10条，防止上下文爆炸
 
         // 2.执行查询
         List<ChatRecord> records = chatRecordMapper.selectList(query);
@@ -215,7 +238,7 @@ public class DeepSeekService {
         List<Message> messages = new ArrayList<>();
         for (ChatRecord record : records) {
             // 把“用户的历史问题”转成UserMessage
-            messages.add(new UserMessage(record.getUserId()));
+            messages.add(new UserMessage(record.getQuestion()));
             // 把“AI的历史回答”转成AssistantMessage
             messages.add(new AssistantMessage(record.getAnswer()));
         }
@@ -252,7 +275,13 @@ public class DeepSeekService {
         if (content.isEmpty()) return "文件解析失败或内容为空";
 
         // 2.【切割】切成500字的小块，重叠50字
-        List<String> chunks = DocumentUtils.splitText(content, 500, 50);
+        // -----------------------------------------------------------------
+        // 修改点 1：上传部分 (Upload) - 缩小切片，提高精度
+        // -----------------------------------------------------------------
+        // 【核心调优A】：Chunk Size从 500 -> 250
+        // 原理：切的越细，细节丢失越少，检索越精准
+        // Overlap从50 -> 30：保持一点重叠即可
+        List<String> chunks = DocumentUtils.splitText(content, 250, 30);
 
         // 3.【消化】批量向量化并上传
         ArrayList<VectorWithUnsignedIndices> upsertList = new ArrayList<>();
@@ -263,8 +292,11 @@ public class DeepSeekService {
 
             if (vector != null) {
                 // 构造Pinecone数据
+                // 注意：这里建议给 ID 加个时间戳或者版本号，防止和昨天的旧数据混淆
+                // 比如: .setId(file.getOriginalFilename() + "_v2_part_" + i)
+                // 但为了简单，你也可以先去 Pinecone 控制台把旧索引删了重建
                 VectorWithUnsignedIndices vectorWithUnsignedIndices = new VectorWithUnsignedIndices(
-                        file.getOriginalFilename() + "_part" + i,
+                        file.getOriginalFilename() + "_v2_part_" + i,
                         vector,
                         Struct.newBuilder()
                                 .putFields("text", Value.newBuilder().setStringValue(chunkText).build())
@@ -293,7 +325,7 @@ public class DeepSeekService {
             try {
                 // pineconeIndex 是你在类成员变量里注入好的 Index 对象
                 for (ArrayList<VectorWithUnsignedIndices> chunk : chunks) {
-                    pineconeIndex.upsert(chunk, "zuel-namespace");
+                    pineconeIndex.upsert(chunk, "zuel-namespace-v2");
                 }
                 System.out.println("✅ 成功！已批量上传数据到 Pinecone。");
                 return true;
