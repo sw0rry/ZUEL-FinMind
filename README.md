@@ -20,3 +20,17 @@
 1. **克隆仓库**
    ```bash
    git clone [https://github.com/sw0rry/ZUEL-FinMind.git](https://github.com/sw0rry/ZUEL-FinMind.git)
+   
+2. **配置密钥**
+在根目录创建 env.list 文件：
+
+   ```Properties
+   YOUR_AI_KEY=your_key_here
+   YOUR_EB_KEY=your_key_here
+   YOUR_EDB_KEY=your_key_here
+   SPRING_DATASOURCE_URL=jdbc:mysql://host.docker.internal:3306/zuel_finmind...
+
+3. **构建并运行**
+   ```Bash
+   docker build -t zuel-finmind:v1.0 .
+   docker run -d -p 8080:8080 --env-file ./env.list zuel-finmind:v1.0
