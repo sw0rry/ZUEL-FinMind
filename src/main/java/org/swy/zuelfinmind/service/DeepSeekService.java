@@ -31,7 +31,7 @@ public class DeepSeekService {
 
     private static final int BATCH_SIZE = 100;
 
-    private static final String NSP = "zuel-namespace";
+    private static final String NSP = "zuel-namespace-v4";
 
     // 依赖注入
     private final ChatModel chatModel;
@@ -80,8 +80,9 @@ public class DeepSeekService {
         // -----------------------------------------------------------------
         // 【核心调优 B】：Top-K 从 3 -> 6
         // 原理：宁可多捞几个无关的，也不能漏掉一个正确的
+        // 🔧 【升级点 1】：广撒网，Top-K从6改为20
         QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(
-                6,
+                20, // <--- 捞20条，先把范围扩大
                 queryVector,
                 null,
                 null,
@@ -89,29 +90,37 @@ public class DeepSeekService {
                 NSP,
                 null,
                 false,
-                true);
+                true
+        );
 
-        // 开始解析
-        String context = queryResponse.getMatchesList().stream()
-                // 过滤：只保留分数高（相似度高）的结果，比如大于0.75
-                // 【核心调优 C】：阈值从 0.45 -> 0.40 (甚至 0.38)
-                // 原理：DeepSeek 很聪明，稍微不相关一点的资料它能自己剔除，不要在这一步卡太死
-                .filter(match -> match.getScore() > 0.4)
+        // ---------------------------------------------------------
+        // 🔧 【升级点 2】：引入 Java 内存重排序
+        // ---------------------------------------------------------
+        List<String> bestChunks = rerank(queryResponse, userMessage); // <--- 调用新方法
 
-                // 提取：从Protobuf结构里把文字挖出来
-                .map(match -> {
-                    // 拿到metadata里的所有字段map
-                    Map<String, Value> fieldsMap = match.getMetadata().getFieldsMap();
+        String context = String.join("\n\n", bestChunks);
 
-                    // 【关键点】key是”text“
-                    if (fieldsMap.containsKey("text")) {
-                        return fieldsMap.get("text").getStringValue();
-                    } else {
-                        return ""; // 没找到返回空
-                    }
-                })
-                // 拼接：把多条结果拼成一段话，用换行符隔开
-                .collect(Collectors.joining("\n\n"));
+//        // 开始解析
+//        String context = queryResponse.getMatchesList().stream()
+//                // 过滤：只保留分数高（相似度高）的结果，比如大于0.75
+//                // 【核心调优 C】：阈值从 0.45 -> 0.40 (甚至 0.38)
+//                // 原理：DeepSeek 很聪明，稍微不相关一点的资料它能自己剔除，不要在这一步卡太死
+//                .filter(match -> match.getScore() > 0.4)
+//
+//                // 提取：从Protobuf结构里把文字挖出来
+//                .map(match -> {
+//                    // 拿到metadata里的所有字段map
+//                    Map<String, Value> fieldsMap = match.getMetadata().getFieldsMap();
+//
+//                    // 【关键点】key是”text“
+//                    if (fieldsMap.containsKey("text")) {
+//                        return fieldsMap.get("text").getStringValue();
+//                    } else {
+//                        return ""; // 没找到返回空
+//                    }
+//                })
+//                // 拼接：把多条结果拼成一段话，用换行符隔开
+//                .collect(Collectors.joining("\n\n"));
 
         // 3. 打印出来看看 (这就是我们要喂给 AI 的背景资料)
         System.out.println("🤖 RAG 检索到的干货:\n" + context);
@@ -200,7 +209,7 @@ public class DeepSeekService {
         // 【核心调优A】：Chunk Size从 500 -> 250
         // 原理：切的越细，细节丢失越少，检索越精准
         // Overlap从50 -> 30：保持一点重叠即可
-        List<String> chunks = DocumentUtils.splitText(content, 250, 30);
+        List<String> chunks = DocumentUtils.splitText(content, 150, 35);
 
         // 3.【消化】批量向量化并上传
         ArrayList<VectorWithUnsignedIndices> upsertList = new ArrayList<>();
@@ -265,7 +274,7 @@ public class DeepSeekService {
             try {
                 // pineconeIndex 是你在类成员变量里注入好的 Index 对象
                 for (ArrayList<VectorWithUnsignedIndices> chunk : chunks) {
-                    pineconeIndex.upsert(chunk, "zuel-namespace-v2");
+                    pineconeIndex.upsert(chunk, NSP);
                 }
                 System.out.println("✅ 成功！已批量上传数据到 Pinecone。");
                 return true;
@@ -297,5 +306,60 @@ public class DeepSeekService {
         }
 
         return chunks;
+    }
+
+    /**
+     * 🧠 核心算法：内存重排序 (Hybrid Rerank)
+     * 结合了“向量相似度”和“关键词匹配度”
+     */
+    private List<String> rerank(QueryResponseWithUnsignedIndices response, String userQuery) {
+        // 1.提取所有候选项
+        var matches = response.getMatchesList();
+
+        // 简单分词：把用户问题按空格或标点切开（简易版，不需要引入 Jieba）
+        // 比如“ZUEL新增了什么实验班” -> ["ZUEL", "新增", "了", "什么", "实验班"]
+        String[] keywords = userQuery.split("[\\s,?.!，。？！]+");
+
+        // 2.定义一个临时类来存分数
+        class ScoreChunk {
+            String text;
+            double finalScore;
+
+            ScoreChunk(String text, double vectorScore, double keywordScore) {
+                this.text = text;
+                // 🔥 核心公式：向量分占 70%，关键词分占 30%
+                this.finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
+            }
+        }
+
+        List<ScoreChunk> scoredList = new ArrayList<>();
+
+        for (var match : matches) {
+            if (!match.getMetadata().getFieldsMap().containsKey("text")) continue;
+
+            String text = match.getMetadata().getFieldsMap().get("text").getStringValue();
+            float vectorScore = match.getScore(); // 0.0 ~ 1.0
+
+            // 3.计算关键词命中率
+            int hitCount = 0;
+            for (String keyword : keywords) {
+                if (keyword.length() > 1 && text.contains(keyword)) { // 忽略单字，防止干扰
+                    hitCount++;
+                }
+            }
+            // 归一化：假设命中3个词就是满分（避免分数爆炸）
+            double keywordScore = Math.min(hitCount / 3.0, 1.0);
+
+            scoredList.add(new ScoreChunk(text, vectorScore, keywordScore));
+        }
+
+        // 4.按最终分数倒序排列（分数高的排在前面）
+        scoredList.sort((a,b) -> Double.compare(b.finalScore, a.finalScore));
+
+        // 5.取前5名（Top 5）
+        return scoredList.stream()
+                .limit(5)
+                .map(s -> s.text)
+                .collect(Collectors.toList());
     }
 }
