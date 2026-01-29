@@ -15,8 +15,6 @@ EXPOSE 8080
 # app.jar是我们给它起的别名，方便后面启动
 COPY target/*.jar app.jar
 
-#COPY .env
-
 # 6.启动命令
 # 这里的参数是为了加快启动速度，并指定时区
 ENTRYPOINT ["java", "-Djava.security.egd=file:/dev/./urandom", "-Duser.timezone=Asia/Shanghai", "-jar", "app.jar"]
