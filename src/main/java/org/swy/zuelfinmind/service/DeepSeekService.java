@@ -9,7 +9,6 @@ import com.google.protobuf.Value;
 import io.pinecone.clients.Index;
 import io.pinecone.unsigned_indices_model.QueryResponseWithUnsignedIndices;
 import io.pinecone.unsigned_indices_model.VectorWithUnsignedIndices;
-import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -32,6 +31,8 @@ public class DeepSeekService {
 
     private static final int BATCH_SIZE = 100;
 
+    private static final String NSP = "zuel-namespace";
+
     // 依赖注入
     private final ChatModel chatModel;
 
@@ -45,7 +46,7 @@ public class DeepSeekService {
     private final Index pineconeIndex;
 
     // 构造函数注入：Spring会自动把ChatModel递给你
-    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient/*, KnowledgeBaseService kbService*/, Index pineconeIndex/*, Pinecone pineconeClient*/) {
+    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient, Index pineconeIndex) {
         this.chatModel = chatModel;
         this.chatRecordMapper = chatRecordMapper;
         this.zhipuAiClient = zhipuAiClient;
@@ -79,7 +80,16 @@ public class DeepSeekService {
         // -----------------------------------------------------------------
         // 【核心调优 B】：Top-K 从 3 -> 6
         // 原理：宁可多捞几个无关的，也不能漏掉一个正确的
-        QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(6, queryVector, null, null, null, "zuel-namespace-v2", null, false, true);
+        QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(
+                6,
+                queryVector,
+                null,
+                null,
+                null,
+                NSP,
+                null,
+                false,
+                true);
 
         // 开始解析
         String context = queryResponse.getMatchesList().stream()
@@ -150,76 +160,6 @@ public class DeepSeekService {
         return aiAnswer;
     }
 
-//    @PostConstruct
-//    public void initData() {
-//        System.out.println(">>> 正在通过官方 SDK 初始化数据...");
-//
-//        List<String> texts = List.of(
-//                "ZUEL (中南财经政法大学) 的王牌专业是会计学、金融学和法学。",
-//                "DeepSeek 是一家专注通用的 AI 公司，提供强大的推理模型。",
-//                "Pinecone 是一个云端向量数据库，官方 SDK 比 Spring 封装更灵活。",
-//                "Java 能写代码，也能开发 Spring 环境。"
-//        );
-//
-//        ArrayList<VectorWithUnsignedIndices> vectorList = new ArrayList<>();
-//
-//        for (int i = 0; i < texts.size(); i++) {
-//            String text = texts.get(i);
-//
-//            List<Float> vector = getVector(text); // 智谱算向量
-//
-//            if (vector != null) {
-//                // 构造 Metadata (把文本存进去)
-//                Struct metadata = Struct.newBuilder()
-//                                .putFields("text", Value.newBuilder().setStringValue(text).build())
-//                                .putFields("source", Value.newBuilder().setStringValue("init-job").build())
-//                                .build();
-//
-//                VectorWithUnsignedIndices vectorWithUnsignedIndices = new VectorWithUnsignedIndices(
-//                        "doc-" + i,
-//                        vector,
-//                        metadata,
-//                        null
-//                );
-//
-//                vectorList.add(vectorWithUnsignedIndices);
-//
-////                try {
-////                    pineconeIndex.upsert("" + i, vector, null, null, metadata, "zuel-namespace");
-////                    System.out.println("✅ 成功！已上传 " + (i + 1) + " 条数据到 Pinecone。");
-////                } catch (Exception e) {
-////                    System.err.println("❌ 上传失败: " + e.getMessage());
-////                    e.printStackTrace();
-////                }
-//            }
-//        }
-//
-//        UpsertBatch(vectorList);
-//    }
-
-    // A helper function that breaks an ArrayList into chunks of batchSize
-    private static ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks(ArrayList<VectorWithUnsignedIndices> vectors) {
-        ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks = new ArrayList<>();
-        ArrayList<VectorWithUnsignedIndices> chunk = new ArrayList<>();
-
-        if (vectors.size() <= BATCH_SIZE) {
-            chunks.add(vectors);
-            return chunks;
-        }
-
-        for (int i = 0; i < vectors.size(); i++) {
-            if (i % BATCH_SIZE == 0 && i != 0) {
-                chunks.add(chunk);
-                chunk = new ArrayList<>();
-            }
-
-            chunk.add(vectors.get(i));
-        }
-
-        return chunks;
-    }
-
-
     // === 【新增方法】 去档案室查历史记录 ===
     private List<Message> getHistoryMessages(String userId) {
         // 1.MyBatis-Plus查询构造器
@@ -243,27 +183,6 @@ public class DeepSeekService {
             messages.add(new AssistantMessage(record.getAnswer()));
         }
         return messages;
-    }
-
-    // --- 工具方法：调用智谱获取向量（Double转Float）
-    private List<Float> getVector(String text) {
-        try {
-            EmbeddingCreateParams request = new EmbeddingCreateParams();
-            request.setModel("embedding-3");
-            request.setDimensions(1024);
-            request.setInput(text);
-
-            EmbeddingResponse response = zhipuAiClient.embeddings().createEmbeddings(request);
-
-            if (response.isSuccess()) {
-                // 智谱返回List<Double>,Pinecone需要List<Float>
-                List<Double> doubleList = response.getData().getData().get(0).getEmbedding();
-                return doubleList.stream().map(Double::floatValue).collect(Collectors.toList());
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return null;
     }
 
     /**
@@ -296,7 +215,7 @@ public class DeepSeekService {
                 // 比如: .setId(file.getOriginalFilename() + "_v2_part_" + i)
                 // 但为了简单，你也可以先去 Pinecone 控制台把旧索引删了重建
                 VectorWithUnsignedIndices vectorWithUnsignedIndices = new VectorWithUnsignedIndices(
-                        file.getOriginalFilename() + "_v2_part_" + i,
+                        file.getOriginalFilename() + "_part_" + i,
                         vector,
                         Struct.newBuilder()
                                 .putFields("text", Value.newBuilder().setStringValue(chunkText).build())
@@ -319,6 +238,27 @@ public class DeepSeekService {
         }
     }
 
+    // --- 工具方法：调用智谱获取向量（Double转Float）
+    private List<Float> getVector(String text) {
+        try {
+            EmbeddingCreateParams request = new EmbeddingCreateParams();
+            request.setModel("embedding-3");
+            request.setDimensions(1024);
+            request.setInput(text);
+
+            EmbeddingResponse response = zhipuAiClient.embeddings().createEmbeddings(request);
+
+            if (response.isSuccess()) {
+                // 智谱返回List<Double>,Pinecone需要List<Float>
+                List<Double> doubleList = response.getData().getData().get(0).getEmbedding();
+                return doubleList.stream().map(Double::floatValue).collect(Collectors.toList());
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
     private boolean UpsertBatch(ArrayList<VectorWithUnsignedIndices> vectors) {
         if (!vectors.isEmpty()) {
             ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks = chunks(vectors);
@@ -337,4 +277,25 @@ public class DeepSeekService {
         return false;
     }
 
+    // A helper function that breaks an ArrayList into chunks of batchSize
+    private static ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks(ArrayList<VectorWithUnsignedIndices> vectors) {
+        ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks = new ArrayList<>();
+        ArrayList<VectorWithUnsignedIndices> chunk = new ArrayList<>();
+
+        if (vectors.size() <= BATCH_SIZE) {
+            chunks.add(vectors);
+            return chunks;
+        }
+
+        for (int i = 0; i < vectors.size(); i++) {
+            if (i % BATCH_SIZE == 0 && i != 0) {
+                chunks.add(chunk);
+                chunk = new ArrayList<>();
+            }
+
+            chunk.add(vectors.get(i));
+        }
+
+        return chunks;
+    }
 }
