@@ -8,7 +8,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("chat_record") // 绑定数据库表名
+@TableName("chat_record_v2") // 绑定数据库表名
 public class ChatRecord {
 
     @TableId(type = IdType.AUTO) // 对应数据库的AUTO_INCREMENT

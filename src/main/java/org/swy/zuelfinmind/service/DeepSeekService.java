@@ -3,13 +3,11 @@ package org.swy.zuelfinmind.service;
 import ai.z.openapi.ZhipuAiClient;
 import ai.z.openapi.service.embedding.EmbeddingCreateParams;
 import ai.z.openapi.service.embedding.EmbeddingResponse;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.google.protobuf.Struct;
 import com.google.protobuf.Value;
 import io.pinecone.clients.Index;
 import io.pinecone.unsigned_indices_model.QueryResponseWithUnsignedIndices;
 import io.pinecone.unsigned_indices_model.VectorWithUnsignedIndices;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -21,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.swy.zuelfinmind.entity.ChatRecord;
 import org.swy.zuelfinmind.mapper.ChatRecordMapper;
 import org.swy.zuelfinmind.utils.DocumentUtils;
+import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -31,13 +30,16 @@ public class DeepSeekService {
 
     private static final int BATCH_SIZE = 100;
 
-    private static final String NSP = "zuel-namespace-v4";
+    private static final String NSP = "zuel-namespace-v5";
 
     // 依赖注入
     private final ChatModel chatModel;
 
-    // 引入档案管理员（Mapper）
-    private final ChatRecordMapper chatRecordMapper;
+//    // 引入档案管理员（Mapper）
+//    private final ChatRecordMapper chatRecordMapper;
+
+    // ✅ 注入新的后勤官
+    private final ChatHistoryService historyService;
 
     // 注入官方客户端
     private final ZhipuAiClient zhipuAiClient;
@@ -46,20 +48,88 @@ public class DeepSeekService {
     private final Index pineconeIndex;
 
     // 构造函数注入：Spring会自动把ChatModel递给你
-    public DeepSeekService(ChatModel chatModel, ChatRecordMapper chatRecordMapper, ZhipuAiClient zhipuAiClient, Index pineconeIndex) {
+    public DeepSeekService(ChatModel chatModel, ChatHistoryService historyService, /*ChatRecordMapper chatRecordMapper ,*/ ZhipuAiClient zhipuAiClient, Index pineconeIndex) {
         this.chatModel = chatModel;
-        this.chatRecordMapper = chatRecordMapper;
+        this.historyService = historyService;
+//        this.chatRecordMapper = chatRecordMapper;
         this.zhipuAiClient = zhipuAiClient;
         this.pineconeIndex = pineconeIndex;
     }
 
-    public String chat(String userId, String userMessage) {
+//    public Flux<String> streamChat(String userId, String userQ) {
+//        // 1.RAG前置处理（和普通版一样，先查资料）===========================
+//        List<Message> historyMessages = historyService.getHistoryMessages(userId);
+//        List<Float> queryVector = getVector(userQ);
+//
+//        // 检索 + Rerank（复用逻辑）
+//        var pineconeRes = pineconeIndex.query(
+//                20,
+//                queryVector,
+//                null,
+//                null,
+//                null,
+//                NSP,
+//                null,
+//                false,
+//                true
+//        );
+//        List<String> bestChunks = rerank(pineconeRes, userQ);
+//        String context = String.join("\n\n", bestChunks);
+//
+//        // 构造Prompt
+//        String finalUserMsg = (context == null || context.isEmpty())
+//                ? userQ
+//                : "【背景资料】：" + context + "\n\n【问题】：" + userQ;
+//
+//        List<Message> promptList = new ArrayList<>();
+//        promptList.add(new SystemMessage(
+//                """
+//          你是一个名为 'ZUEL-FinMind' 的专业金融AI助手，由中南财经政法大学(ZUEL)的学生开发。
+//
+//          你的核心原则：
+//          1. 优先回答有关中南财经政法大学、金融、经济、编程相关的问题。
+//          2. 如果用户进行自我介绍或日常问候，请热情回应并记住他们的信息。
+//          3. 回答要简短精炼，多用数据说话。
+//          """
+//        ));
+//        promptList.addAll(historyMessages);
+//        promptList.add(new UserMessage(finalUserMsg));
+//
+//        Prompt prompt = new Prompt(promptList);
+//
+//        // 2.核心：流式调用 + 偷窥数据用于存档 ===============================
+//
+//        // 用于收集完整的回答，方便最后存库
+//        var fullAnswerAccumulator = new StringBuilder();
+//
+//        return chatModel.stream(prompt)
+//                .map(response -> {
+//                    // 从流里拿到一个字/词
+//                    String chunk = response.getResult().getOutput().getText();
+//                    // 可能是null，做个判断
+//                    return chunk != null ? chunk : "";
+//                })
+//                // 【关键】每流过一个字，就往StringBuilder里塞
+//                .doOnNext(fullAnswerAccumulator::append)
+//                // 【关键】当流结束（OnComplete）时，执行存库操作
+//                .doOnComplete(() -> {
+//                    String fullAnswer = fullAnswerAccumulator.toString();
+//                    System.out.println("✅ 流式生成完毕，存入记忆库。");
+//                    // 调用后勤官存库
+//                    historyService.saveInteraction(userId, userQ, fullAnswer);
+//                })
+//                .doOnError(e -> {
+//                    System.err.println("❌ 流式生成中断：" + e.getMessage());
+//                });
+//    }
+
+    public Flux<String> chat(String userId, String userMessage) {
         // 1.准备“面包顶层”：系统人设
         String systemText = """
         你是一个名为 'ZUEL-FinMind' 的专业金融AI助手，由中南财经政法大学(ZUEL)的学生开发。
-        
+
         你的核心原则：
-        1. 优先回答有关中南财经政法大学、金融、经济、编程相关的问题。
+        1. 优先回答有关ZUEL、金融、经济、编程相关的问题。
         2. 如果用户进行自我介绍或日常问候，请热情回应并记住他们的信息。
         3. 回答要简短精炼，多用数据说话。
         """;
@@ -67,8 +137,10 @@ public class DeepSeekService {
         SystemMessage systemMsg = new SystemMessage(systemText);
 
         // 2.准备”中间夹心“：从数据库捞取历史记忆
-        // 逻辑：查出最近的10条，按时间倒序查（最新的在上面），然后反转回来（按时间正序）
-        List<Message> historyMessages = getHistoryMessages(userId);
+//        // 逻辑：查出最近的10条，按时间倒序查（最新的在上面），然后反转回来（按时间正序）
+//        List<Message> historyMessages = getHistoryMessages(userId);
+
+        List<Message> historyMessages = historyService.getHistoryMessages(userId);
 
         // 3.准备”面包底层“：知识库 + 当前提问
         // 算向量
@@ -97,6 +169,11 @@ public class DeepSeekService {
         // 🔧 【升级点 2】：引入 Java 内存重排序
         // ---------------------------------------------------------
         List<String> bestChunks = rerank(queryResponse, userMessage); // <--- 调用新方法
+
+        // 🔥【修复】增加一道防盗门！
+        // 如果 Rerank 之后的第一名分数都太低（比如小于 0.6），说明查出来的都是垃圾，直接丢弃。
+        // 注意：这里需要你修改一下 rerank 方法，让它返回带分数的对象，或者我们简单粗暴一点：
+        // 我们直接在 Pinecone 返回时就过滤。
 
         String context = String.join("\n\n", bestChunks);
 
@@ -139,7 +216,7 @@ public class DeepSeekService {
             // 策略：严格限制范围，防止幻觉
             System.out.println("🤖 检索到RAG资料，切换为[严格知识库模式]");
             finalUserMsg = String.format(
-                    "【背景资料】：%s\n\n【用户问题】：%s\n\n请结合背景资料和上下文回答。如果资料中包含答案，请依据资料；如果是闲聊或资料不相关，请利用你的通用知识回答。",
+                    "【背景资料】：%s\n\n【用户问题】：%s\n\n请结合背景资料和上下文回答。如果资料中包含答案，请依据资料；如果是闲聊或与资料不相关，请利用你的通用知识回答。",
                     context,
                     userMessage
             );
@@ -155,44 +232,70 @@ public class DeepSeekService {
 
         // 5.发送请求
         Prompt prompt = new Prompt(prompList);
-        ChatResponse response = chatModel.call(prompt);
-        String aiAnswer = response.getResult().getOutput().getText();
+//        ChatResponse response = chatModel.call(prompt);
+//        String aiAnswer = response.getResult().getOutput().getText();
 
         // 6.记账（持久化本次对话）
-        ChatRecord record = new ChatRecord();
-        record.setUserId(userId);
-        record.setQuestion(userMessage);
-        record.setAnswer(aiAnswer);
-        record.setCreateTime(LocalDateTime.now());
-        chatRecordMapper.insert(record);
+//        ChatRecord record = new ChatRecord();
+//        record.setUserId(userId);
+//        record.setQuestion(userMessage);
+//        record.setAnswer(aiAnswer);
+//        record.setCreateTime(LocalDateTime.now());
+//        chatRecordMapper.insert(record);
 
-        return aiAnswer;
+//        historyService.saveInteraction(userId, userMessage, aiAnswer);
+//
+//        return aiAnswer;
+
+        // 用于收集完整的回答，方便最后存库
+        StringBuilder fullAnswerAccumulator = new StringBuilder();
+
+        return chatModel.stream(prompt)
+                .map(response -> {
+                    // 从流里拿到一个字/词
+                    String chunks = response.getResult().getOutput().getText();
+                    // 可能是 null，做个判断
+                    return chunks != null ? chunks : "";
+                })
+                // 【关键】每流过一个字，就往 StringBuilder 里塞
+                .doOnNext(fullAnswerAccumulator::append)
+                .doOnComplete(() -> {
+                    String fullAnswer = fullAnswerAccumulator.toString();
+                    System.out.println("✅ 流式生成完毕，存入记忆库。");
+                    // 调用后勤官存库
+                    historyService.saveInteraction(userId, userMessage, fullAnswer);
+                })
+                .doOnError(e -> {
+                    System.err.println("❌ 流式生成中断：" + e.getMessage());
+                });
+
+        // 【关键】当流结束(OnComplete)时，执行存库操作
     }
 
-    // === 【新增方法】 去档案室查历史记录 ===
-    private List<Message> getHistoryMessages(String userId) {
-        // 1.MyBatis-Plus查询构造器
-        QueryWrapper<ChatRecord> query = new QueryWrapper<>();
-        query.eq("user_id", userId) // 查当前客户
-                .orderByDesc("create_time") // 按时间倒序（为了取最新的）
-                .last("limit 3"); // 只取最近10条，防止上下文爆炸
-
-        // 2.执行查询
-        List<ChatRecord> records = chatRecordMapper.selectList(query);
-
-        // 3.因为查出来是倒序的（最新->最旧），对话要按正序发（旧->新），所以要反转
-        Collections.reverse(records);
-
-        // 4.转换格式：Entity->SpringAI Message
-        List<Message> messages = new ArrayList<>();
-        for (ChatRecord record : records) {
-            // 把“用户的历史问题”转成UserMessage
-            messages.add(new UserMessage(record.getQuestion()));
-            // 把“AI的历史回答”转成AssistantMessage
-            messages.add(new AssistantMessage(record.getAnswer()));
-        }
-        return messages;
-    }
+//    // === 【新增方法】 去档案室查历史记录 ===
+//    private List<Message> getHistoryMessages(String userId) {
+//        // 1.MyBatis-Plus查询构造器
+//        QueryWrapper<ChatRecord> query = new QueryWrapper<>();
+//        query.eq("user_id", userId) // 查当前客户
+//                .orderByDesc("create_time") // 按时间倒序（为了取最新的）
+//                .last("limit 3"); // 只取最近10条，防止上下文爆炸
+//
+//        // 2.执行查询
+//        List<ChatRecord> records = chatRecordMapper.selectList(query);
+//
+//        // 3.因为查出来是倒序的（最新->最旧），对话要按正序发（旧->新），所以要反转
+//        Collections.reverse(records);
+//
+//        // 4.转换格式：Entity->SpringAI Message
+//        List<Message> messages = new ArrayList<>();
+//        for (ChatRecord record : records) {
+//            // 把“用户的历史问题”转成UserMessage
+//            messages.add(new UserMessage(record.getQuestion()));
+//            // 把“AI的历史回答”转成AssistantMessage
+//            messages.add(new AssistantMessage(record.getAnswer()));
+//        }
+//        return messages;
+//    }
 
     /**
      * 🆕 核心功能：上传文件 -> 解析 -> 切块 -> 向量化 -> 存库
@@ -209,7 +312,7 @@ public class DeepSeekService {
         // 【核心调优A】：Chunk Size从 500 -> 250
         // 原理：切的越细，细节丢失越少，检索越精准
         // Overlap从50 -> 30：保持一点重叠即可
-        List<String> chunks = DocumentUtils.splitText(content, 150, 35);
+        List<String> chunks = DocumentUtils.splitText(content, 200, 50);
 
         // 3.【消化】批量向量化并上传
         ArrayList<VectorWithUnsignedIndices> upsertList = new ArrayList<>();
@@ -315,6 +418,7 @@ public class DeepSeekService {
     private List<String> rerank(QueryResponseWithUnsignedIndices response, String userQuery) {
         // 1.提取所有候选项
         var matches = response.getMatchesList();
+        if (matches == null || matches.isEmpty()) return Collections.emptyList();
 
         // 简单分词：把用户问题按空格或标点切开（简易版，不需要引入 Jieba）
         // 比如“ZUEL新增了什么实验班” -> ["ZUEL", "新增", "了", "什么", "实验班"]
@@ -327,8 +431,8 @@ public class DeepSeekService {
 
             ScoreChunk(String text, double vectorScore, double keywordScore) {
                 this.text = text;
-                // 🔥 核心公式：向量分占 70%，关键词分占 30%
-                this.finalScore = (vectorScore * 0.7) + (keywordScore * 0.3);
+                // 🔥 核心公式：向量分占 80%，关键词分占 20%
+                this.finalScore = (vectorScore * 0.8) + (keywordScore * 0.2);
             }
         }
 
@@ -340,6 +444,8 @@ public class DeepSeekService {
             String text = match.getMetadata().getFieldsMap().get("text").getStringValue();
             float vectorScore = match.getScore(); // 0.0 ~ 1.0
 
+            if (vectorScore < 0.4) continue;
+
             // 3.计算关键词命中率
             int hitCount = 0;
             for (String keyword : keywords) {
@@ -350,6 +456,8 @@ public class DeepSeekService {
             // 归一化：假设命中3个词就是满分（避免分数爆炸）
             double keywordScore = Math.min(hitCount / 3.0, 1.0);
 
+            System.out.printf("Doc: %.20s... | V: %.2f | K: %.2f | Final: %.2f%n", text, vectorScore, keywordScore, (vectorScore * 0.8) + (keywordScore * 0.2));
+
             scoredList.add(new ScoreChunk(text, vectorScore, keywordScore));
         }
 
@@ -358,6 +466,7 @@ public class DeepSeekService {
 
         // 5.取前5名（Top 5）
         return scoredList.stream()
+                .filter(match -> match.finalScore > 0.45)
                 .limit(5)
                 .map(s -> s.text)
                 .collect(Collectors.toList());

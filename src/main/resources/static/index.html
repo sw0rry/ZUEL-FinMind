@@ -297,15 +297,13 @@
                 <div class="avatar">
                     <i :class="msg.role === 'user' ? 'fas fa-user' : 'fas fa-robot'"></i>
                 </div>
-                <div class="bubble" v-if="msg.role === 'ai'" v-html="renderMarkdown(msg.content)"></div>
-                <div class="bubble" v-else>{{ msg.content }}</div>
-            </div>
-
-            <div v-if="loading" class="message ai">
-                <div class="avatar"><i class="fas fa-robot"></i></div>
-                <div class="bubble">
-                    <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+                <div class="bubble" v-if="msg.role === 'ai'">
+                    <div v-if="!msg.content" class="typing-dot-container">
+                        <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+                    </div>
+                    <div v-else v-html="renderMarkdown(msg.content)"></div>
                 </div>
+                <div class="bubble" v-else>{{ msg.content }}</div>
             </div>
         </div>
 
@@ -378,27 +376,86 @@
                 const text = userInput.value.trim();
                 if (!text || loading.value) return;
 
+                // 1. 推入用户消息
                 messages.value.push({ role: 'user', content: text });
                 userInput.value = '';
                 loading.value = true;
                 scrollToBottom();
+
+                // 2.预先放一个空的AI回答框(先占位，显示跳动动画)
+                const aiMsgIndex = messages.value.push({ role: 'ai', content: '' }) - 1;
 
                 try {
                     addLog(`Request: ${text}`);
                     // 模拟网络延迟感 (可选)
                     // await new Promise(r => setTimeout(r, 500));
 
-                    const res = await axios.get(`/ai/chat`, {
-                        params: {
-                            userId: userId.value, // 传身份证
-                            message: text,
+                    // const res = await axios.get(`/ai/chat`, {
+                    //     params: {
+                    //         userId: userId.value, // 传身份证
+                    //         message: text,
+                    //     }
+                    // });
+                    //
+                    // messages.value.push({ role: 'ai', content: res.data });
+
+                    // 3.发送流式请求
+                    // FIX 1: 修正参数名，确保是 &message=... (对应后端 @RequestParam String message)
+                    // 务必确认你的后端 Controller 路径是 /ai/chat 还是 /api/chat
+                    const res = await fetch(`http://localhost:8080/ai/chat?userId=${userId.value}&message=${encodeURIComponent(text)}`, {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'text/event-stream',
                         }
                     });
 
-                    messages.value.push({ role: 'ai', content: res.data });
+                    if (!res.ok) {
+                        // 如果报错，读取错误信息
+                        throw new Error(`Server Error: ${res.status}`);
+                    }
+
+                    // 4.获得读取器
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder("utf-8");
+                    let buffer = ''; // 📦 新增：专门用来存碎片的缓冲区
+
+                    // 5.循环读取流
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        // 解码二进制流为文本
+                        // 1. 解码当前碎片并拼接到缓冲区
+                        buffer += decoder.decode(value, { stream: true });
+
+                        // 2. 只有遇到换行符，才说明一句话说完了
+                        // 【核心】把新来的字追加到当前AI回答里
+                        // Vue会自动响应式更新DOM，实现打字机效果
+                        // FIX 2: 解析 SSE 格式 (去除 data: 前缀)
+                        // SSE 数据通常是: "data:Hello\n\ndata:World\n\n"
+                        const lines = buffer.split('\n');
+
+                        // 3. 拿出最后一段（可能是不完整的），放回缓冲区等下一波数据
+                        buffer = lines.pop();
+
+                        // 4. 处理完整的句子
+                        for (const line of lines) {
+                            if (line.startsWith('data:')) {
+                                // 截取 'data:' 后面的内容
+                                // slice(5) 去掉 'data:'
+                                // ⚠️ 严禁使用 trim()！否则所有空格和缩进都会消失，代码块会乱成一团
+                                const content = line.slice(5);
+                                // 追加到当前消息中
+                                messages.value[aiMsgIndex].content += content;
+                            }
+                        }
+
+                        // 可选：自动滚动到底部
+                        scrollToBottom();
+                    }
                     addLog('Response received (200 OK)');
                 } catch (e) {
-                    messages.value.push({ role: 'ai', content: '**System Error:** ' + e.message });
+                    messages.value.push({ role: 'ai', content: 'System Error: ' + e.message });
                     addLog(`Error: ${e.message}`);
                 } finally {
                     loading.value = false;

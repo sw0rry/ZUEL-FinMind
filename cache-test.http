@@ -51,3 +51,12 @@ Content-Type: application/json
   "userId": "1",
   "message": "ZUEL现在有多少本科生？"
 }
+
+### 暂时测试7
+GET http://localhost:8080/ai/chat
+Content-Type: application/json
+
+{
+  "userId": "1",
+  "message": "你好我是三文鱼"
+}

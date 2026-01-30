@@ -1,8 +1,10 @@
 package org.swy.zuelfinmind.controller;
 
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.swy.zuelfinmind.service.DeepSeekService;
+import reactor.core.publisher.Flux;
 
 @RestController
 @RequestMapping("/ai")
@@ -24,9 +26,9 @@ public class KnowledgeController {
 
     // 1. 【新增】聊天接口 (修复 405 问题的关键)
     // 前端用的是 GET 请求，所以这里必须是 @GetMapping
-    @GetMapping("/chat")
-    public String chat(@RequestParam("userId") String userId,
-                       @RequestParam("message") String message) {
+    @GetMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")
+    public Flux<String> chat(@RequestParam("userId") String userId,
+                             @RequestParam("message") String message) {
         // 调用 DeepSeekService 的 chat 方法
         return deepSeekService.chat(userId, message);
     }
