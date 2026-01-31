@@ -1,10 +1,14 @@
 HELP.md
 target/
+*.class
+*.jar
+*.war
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
 
 .env
+env.list
 
 ### STS ###
 .apt_generated

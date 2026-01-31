@@ -1,0 +1,21 @@
+services:
+  # 你的后端应用 (可选，如果你还是习惯在 IDEA 里跑，这个可以先注释掉)
+  # zuel-finmind-backend: ...
+
+  # 🔥 新增 Chroma 向量数据库
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: zuel-chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据，重启后数据不丢
+      - ./chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+    networks:
+      - zuel-net
+
+networks:
+  zuel-net:
+    driver: bridge

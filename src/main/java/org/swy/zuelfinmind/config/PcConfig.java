@@ -40,7 +40,7 @@ public class PcConfig {
     public Index pineconeIndex() {
         // 获取索引连接
         PineconeConfig config = new PineconeConfig(apiKey);
-        config.setHost("zuel-finmind-v3-w81fj87.svc.aped-4627-b74a.pinecone.io");
+        config.setHost("zuel-finmind-w81fj87.svc.aped-4627-b74a.pinecone.io");
         PineconeConnection connection = new PineconeConnection(config);
 
         return new Index(config, connection, "zuel-finmind-v3");

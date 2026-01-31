@@ -1,13 +1,7 @@
 package org.swy.zuelfinmind.service;
 
-import ai.z.openapi.ZhipuAiClient;
-import ai.z.openapi.service.embedding.EmbeddingCreateParams;
-import ai.z.openapi.service.embedding.EmbeddingResponse;
-import com.google.protobuf.Struct;
-import com.google.protobuf.Value;
-import io.pinecone.clients.Index;
-import io.pinecone.unsigned_indices_model.QueryResponseWithUnsignedIndices;
-import io.pinecone.unsigned_indices_model.VectorWithUnsignedIndices;
+import com.huaban.analysis.jieba.JiebaSegmenter;
+import com.huaban.analysis.jieba.SegToken;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -17,7 +11,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.swy.zuelfinmind.model.VectorSearchResult;
 import org.swy.zuelfinmind.service.strategy.impl.PineconeVectorStore;
-import org.swy.zuelfinmind.utils.DocumentUtils;
 import reactor.core.publisher.Flux;
 
 import java.util.*;
@@ -26,30 +19,27 @@ import java.util.stream.Collectors;
 @Service // 1.告诉Spring：这是“专家”，请开机时把它实例化放到容器里
 public class DeepSeekService {
 
-    private static final int BATCH_SIZE = 100;
-
-    private static final String NSP = "zuel-namespace-v5";
-
     // 依赖注入
     private final ChatModel chatModel;
 
     // ✅ 注入新的后勤官
     private final ChatHistoryService historyService;
 
-    // 注入官方客户端
-    private final ZhipuAiClient zhipuAiClient;
-
-    // 注入向量数据库
-    private final Index pineconeIndex;
-
     private final PineconeVectorStore vectorStore;
 
+    // 实例化分词器（线程安全，可以做成成员变量）
+    private final JiebaSegmenter segmenter =  new JiebaSegmenter();
+
+    // 定义停用词表 (过滤掉没用的字，防止噪音干扰)
+    private static final Set<String> STOP_WORDS = Set.of(
+            "的", "了", "和", "是", "就", "都", "而", "及", "与", "在", "这", "那", "有", "什么", "怎么", "我", "你", "它"
+             // 可选：如果每个文档都有ZUEL，那它就不是区分特征，可以过滤
+    );
+
     // 构造函数注入：Spring会自动把ChatModel递给你
-    public DeepSeekService(ChatModel chatModel, ChatHistoryService historyService, ZhipuAiClient zhipuAiClient, Index pineconeIndex, PineconeVectorStore vectorStore) {
+    public DeepSeekService(ChatModel chatModel, ChatHistoryService historyService, PineconeVectorStore vectorStore) {
         this.chatModel = chatModel;
         this.historyService = historyService;
-        this.zhipuAiClient = zhipuAiClient;
-        this.pineconeIndex = pineconeIndex;
         this.vectorStore = vectorStore;
     }
 
@@ -72,28 +62,11 @@ public class DeepSeekService {
         List<Message> historyMessages = historyService.getHistoryMessages(userId);
 
         // 3.准备”面包底层“：知识库 + 当前提问
-//        // 算向量
-//        List<Float> queryVector = getVector(userMessage);
-//
-//        // 查Pinecone（HTTP）
-//        QueryResponseWithUnsignedIndices queryResponse = pineconeIndex.query(
-//                20, // <--- 捞20条，先把范围扩大
-//                queryVector,
-//                null,
-//                null,
-//                null,
-//                NSP,
-//                null,
-//                false,
-//                true
-//        );
-
         List<VectorSearchResult> candidates = vectorStore.search(userMessage);
 
         // ---------------------------------------------------------
         // 🔧 【升级点 2】：引入 Java 内存重排序
         // ---------------------------------------------------------
-//        List<String> bestChunks = rerank(queryResponse, userMessage); // <--- 调用新方法
         List<String> bestChunks = rerank(candidates, userMessage);
 
         String context = String.join("\n\n", bestChunks);
@@ -105,7 +78,7 @@ public class DeepSeekService {
         // 🔧 【修复点】：根据是否查到资料，动态调整指令
         // -----------------------------------------------------------
         String finalUserMsg;
-        if (context == null || context.trim().isEmpty()) {
+        if (context.trim().isEmpty()) {
             // 场景 A：没查到资料 (比如闲聊、打招呼、自我介绍)
             // 策略：不要强迫它“不知道”，而是让它自由发挥，利用历史记录聊天
             System.out.println("🤖 未检索到RAG资料，切换为[自由对话模式]");
@@ -157,188 +130,41 @@ public class DeepSeekService {
      * 🆕 核心功能：上传文件 -> 解析 -> 切块 -> 向量化 -> 存库
      */
     public String uploadAndLearn(MultipartFile file) {
-//        // 1.【咀嚼】解析文件
-//        String content = DocumentUtils.parseFile(file);
-//        if (content.isEmpty()) return "文件解析失败或内容为空";
-//
-//        // 2.【切割】切成500字的小块，重叠50字
-//        // -----------------------------------------------------------------
-//        // 修改点 1：上传部分 (Upload) - 缩小切片，提高精度
-//        // -----------------------------------------------------------------
-//        // 【核心调优A】：Chunk Size从 500 -> 250
-//        // 原理：切的越细，细节丢失越少，检索越精准
-//        // Overlap从50 -> 30：保持一点重叠即可
-//        List<String> chunks = DocumentUtils.splitText(content, 200, 50);
-//
-//        // 3.【消化】批量向量化并上传
-//        ArrayList<VectorWithUnsignedIndices> upsertList = new ArrayList<>();
-//
-//        for (int i = 0; i < chunks.size(); i++) {
-//            String chunkText = chunks.get(i);
-//            List<Float> vector = getVector(chunkText); // 调用智谱Embedding
-//
-//            if (vector != null) {
-//                // 构造Pinecone数据
-//                // 注意：这里建议给 ID 加个时间戳或者版本号，防止和昨天的旧数据混淆
-//                // 比如: .setId(file.getOriginalFilename() + "_v2_part_" + i)
-//                // 但为了简单，你也可以先去 Pinecone 控制台把旧索引删了重建
-//                VectorWithUnsignedIndices vectorWithUnsignedIndices = new VectorWithUnsignedIndices(
-//                        file.getOriginalFilename() + "_part_" + i,
-//                        vector,
-//                        Struct.newBuilder()
-//                                .putFields("text", Value.newBuilder().setStringValue(chunkText).build())
-//                                .putFields("source", Value.newBuilder().setStringValue(file.getOriginalFilename()).build())
-//                                .build(),
-//                        null
-//
-//                );
-//
-//                upsertList.add(vectorWithUnsignedIndices);
-//            }
-//        }
-//
-//        // 4.发送给Pinecone
-//        boolean isUpsert = UpsertBatch(upsertList);
-//        if (isUpsert) {
-//            return "✅ 学习完成！已存入知识片段";
-//        } else {
-//            return "❌ 学习失败，未能生成向量。";
-//        }
         return vectorStore.store(file);
     }
-
-//    // --- 工具方法：调用智谱获取向量（Double转Float）
-//    private List<Float> getVector(String text) {
-//        try {
-//            EmbeddingCreateParams request = new EmbeddingCreateParams();
-//            request.setModel("embedding-3");
-//            request.setDimensions(1024);
-//            request.setInput(text);
-//
-//            EmbeddingResponse response = zhipuAiClient.embeddings().createEmbeddings(request);
-//
-//            if (response.isSuccess()) {
-//                // 智谱返回List<Double>,Pinecone需要List<Float>
-//                List<Double> doubleList = response.getData().getData().get(0).getEmbedding();
-//                return doubleList.stream().map(Double::floatValue).collect(Collectors.toList());
-//            }
-//        } catch (Exception e) {
-//            e.printStackTrace();
-//        }
-//        return null;
-//    }
-
-//    private boolean UpsertBatch(ArrayList<VectorWithUnsignedIndices> vectors) {
-//        if (!vectors.isEmpty()) {
-//            ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks = chunks(vectors);
-//            try {
-//                // pineconeIndex 是你在类成员变量里注入好的 Index 对象
-//                for (ArrayList<VectorWithUnsignedIndices> chunk : chunks) {
-//                    pineconeIndex.upsert(chunk, NSP);
-//                }
-//                System.out.println("✅ 成功！已批量上传数据到 Pinecone。");
-//                return true;
-//            } catch (Exception e) {
-//                System.err.println("❌ 上传失败: " + e.getMessage());
-//                e.printStackTrace();
-//            }
-//        }
-//        return false;
-//    }
-
-//    // A helper function that breaks an ArrayList into chunks of batchSize
-//    private static ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks(ArrayList<VectorWithUnsignedIndices> vectors) {
-//        ArrayList<ArrayList<VectorWithUnsignedIndices>> chunks = new ArrayList<>();
-//        ArrayList<VectorWithUnsignedIndices> chunk = new ArrayList<>();
-//
-//        if (vectors.size() <= BATCH_SIZE) {
-//            chunks.add(vectors);
-//            return chunks;
-//        }
-//
-//        for (int i = 0; i < vectors.size(); i++) {
-//            if (i % BATCH_SIZE == 0 && i != 0) {
-//                chunks.add(chunk);
-//                chunk = new ArrayList<>();
-//            }
-//
-//            chunk.add(vectors.get(i));
-//        }
-//
-//        return chunks;
-//    }
 
     /**
      * 🧠 核心算法：内存重排序 (Hybrid Rerank)
      * 结合了“向量相似度”和“关键词匹配度”
+     * 🔄 修复版 Rerank：引入真正的中文分词
      */
-//    private List<String> rerank(QueryResponseWithUnsignedIndices response, String userQuery) {
-//        // 1.提取所有候选项
-//        var matches = response.getMatchesList();
-//        if (matches == null || matches.isEmpty()) return Collections.emptyList();
-//
-//        // 简单分词：把用户问题按空格或标点切开（简易版，不需要引入 Jieba）
-//        // 比如“ZUEL新增了什么实验班” -> ["ZUEL", "新增", "了", "什么", "实验班"]
-//        String[] keywords = userQuery.split("[\\s,?.!，。？！]+");
-//
-//        // 2.定义一个临时类来存分数
-//        class ScoreChunk {
-//            String text;
-//            double finalScore;
-//
-//            ScoreChunk(String text, double vectorScore, double keywordScore) {
-//                this.text = text;
-//                // 🔥 核心公式：向量分占 80%，关键词分占 20%
-//                this.finalScore = (vectorScore * 0.8) + (keywordScore * 0.2);
-//            }
-//        }
-//
-//        List<ScoreChunk> scoredList = new ArrayList<>();
-//
-//        for (var match : matches) {
-//            if (!match.getMetadata().getFieldsMap().containsKey("text")) continue;
-//
-//            String text = match.getMetadata().getFieldsMap().get("text").getStringValue();
-//            float vectorScore = match.getScore(); // 0.0 ~ 1.0
-//
-//            if (vectorScore < 0.4) continue;
-//
-//            // 3.计算关键词命中率
-//            int hitCount = 0;
-//            for (String keyword : keywords) {
-//                if (keyword.length() > 1 && text.contains(keyword)) { // 忽略单字，防止干扰
-//                    hitCount++;
-//                }
-//            }
-//            // 归一化：假设命中3个词就是满分（避免分数爆炸）
-//            double keywordScore = Math.min(hitCount / 3.0, 1.0);
-//
-//            System.out.printf("Doc: %.20s... | V: %.2f | K: %.2f | Final: %.2f%n", text, vectorScore, keywordScore, (vectorScore * 0.8) + (keywordScore * 0.2));
-//
-//            scoredList.add(new ScoreChunk(text, vectorScore, keywordScore));
-//        }
-//
-//        // 4.按最终分数倒序排列（分数高的排在前面）
-//        scoredList.sort((a,b) -> Double.compare(b.finalScore, a.finalScore));
-//
-//        // 5.取前5名（Top 5）
-//        return scoredList.stream()
-//                .filter(match -> match.finalScore > 0.45)
-//                .limit(5)
-//                .map(s -> s.text)
-//                .collect(Collectors.toList());
-//    }
-
     private List<String> rerank(List<VectorSearchResult> candidates, String userMessage) {
 
         // 简单分词：把用户问题按空格或标点切开（简易版，不需要引入 Jieba）
         // 比如“ZUEL新增了什么实验班” -> ["ZUEL", "新增", "了", "什么", "实验班"]
-        String[] keywords = userMessage.split("[\\s,?.!，。？！]+");
+//        String[] keywords = userMessage.split("[\\s,?.!，。？！]+");
+
+
+
+        // --- 🟢 变化点 1：使用结巴分词 ---
+        // SegMode.SEARCH 用于搜索引擎模式，切得比较细
+        List<SegToken> tokens = segmenter.process(userMessage, JiebaSegmenter.SegMode.SEARCH);
+
+        // 提取关键词列表
+        // 核心优化：将 List 转为 HashSet，把 contains 方法的时间复杂度从 O(n) 降到 O(1)
+        Set<String> keywords = new HashSet<>();
+        for (SegToken token : tokens) {
+            String word = token.word;
+            // 过滤规则：长度大于1且不在停用此表中
+            if (word.length() > 1 && !STOP_WORDS.contains(word)) {
+                keywords.add(word);
+            }
+        }
 
         return candidates.stream()
                 .map(candidate -> {
-                    long hitCounts = Arrays.stream(keywords)
-                            .filter(keyword -> keyword.length() > 1 && candidate.getText().contains(keyword))
+                    long hitCounts = keywords.stream()
+                            .filter(keyword -> candidate.getText().contains(keyword))
                             .count();
 
                     double keywordScore = Math.min(hitCounts / 3.0, 1.0);
@@ -353,7 +179,7 @@ public class DeepSeekService {
 
                     return new VectorSearchResult(candidate.getText(), score, candidate.getSource());
                 })
-                .filter(candidate -> candidate.getScore() > 0.45)
+                .filter(candidate -> candidate.getScore() > 0.4)
                 .sorted((a,b) -> Float.compare(b.getScore(), a.getScore()))
                 .limit(5)
                 .map(VectorSearchResult::getText)
