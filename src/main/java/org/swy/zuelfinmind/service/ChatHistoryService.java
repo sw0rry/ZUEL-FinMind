@@ -1,6 +1,7 @@
 package org.swy.zuelfinmind.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -20,11 +21,16 @@ public class ChatHistoryService {
 
     private static final String HISTORY_KEY_PREFIX = "finmind:history:";
 
-    private final RedisTemplate<String, Object> redisTemplate;
+    // 注入Jackson用于把对象转成JSON字符串
+    private final ObjectMapper objectMapper;
+
+    // 建议使用String， String泛型
+    private final RedisTemplate<String, String> redisTemplate;
 
     private final ChatRecordMapper chatRecordMapper;
 
-    public ChatHistoryService(RedisTemplate<String, Object> redisTemplate, ChatRecordMapper chatRecordMapper) {
+    public ChatHistoryService(ObjectMapper objectMapper, RedisTemplate<String, String> redisTemplate, ChatRecordMapper chatRecordMapper) {
+        this.objectMapper = objectMapper;
         this.redisTemplate = redisTemplate;
         this.chatRecordMapper = chatRecordMapper;
     }
@@ -39,10 +45,16 @@ public class ChatHistoryService {
         // 1.⚡ 先查 Redis (内存)
         Long size = redisTemplate.opsForList().size(key);
         if (size != null && size > 0) {
-            List<Object> cachedHistory = redisTemplate.opsForList().range(key, 0, -1);
+            List<String> cachedHistory = redisTemplate.opsForList().range(key, 0, -1);
             // Redis里存的是“User：xxx”这种字符串，我们需要解析回Message对象
             // 为了简单，这里建议Redis只存纯文本，但为了给AI用，我们需要转对象
             // *简化策略*：这里演示直接走DB兜底的逻辑更稳，等熟练后再把Message序列化进Redis
+//            for (String json : cachedHistory) {
+//                try {
+//                    // 这里假设存的是自定义的一个DTO，或者简单点，解析JSON里的content和role
+//
+//                }
+//            }
         }
 
         // --- 暂时降级策略：为了不让代码太复杂，我们在Redis里只存String方便调试 ---
