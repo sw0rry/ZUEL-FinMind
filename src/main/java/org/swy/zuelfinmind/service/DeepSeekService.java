@@ -179,7 +179,7 @@ public class DeepSeekService {
 
                     return new VectorSearchResult(candidate.getText(), score, candidate.getSource());
                 })
-                .filter(candidate -> candidate.getScore() > 0.4)
+                .filter(candidate -> candidate.getScore() > 0.65)// 智谱0.4，集成0.65
                 .sorted((a,b) -> Float.compare(b.getScore(), a.getScore()))
                 .limit(5)
                 .map(VectorSearchResult::getText)

@@ -13,6 +13,10 @@ public class PcConfig {
     @Value("${YOUR_EDB_KEY}")
     private String apiKey;
 
+    private final String indexName = "zuel-finmind-test";
+
+    private final String HOST = "zuel-finmind-test-w81fj87.svc.aped-4627-b74a.pinecone.io";
+
 //    @Bean
 //    public Pinecone pineconeClient() {
 //        // 初始化客户端
@@ -40,9 +44,9 @@ public class PcConfig {
     public Index pineconeIndex() {
         // 获取索引连接
         PineconeConfig config = new PineconeConfig(apiKey);
-        config.setHost("zuel-finmind-w81fj87.svc.aped-4627-b74a.pinecone.io");
+        config.setHost(HOST);
         PineconeConnection connection = new PineconeConnection(config);
 
-        return new Index(config, connection, "zuel-finmind-v3");
+        return new Index(config, connection, indexName);
     }
 }
